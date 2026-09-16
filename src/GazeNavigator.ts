@@ -1,4 +1,5 @@
 import { Emitter } from "./event-emitter.js";
+import { GazeCalibration } from "./GazeCalibration.js";
 import type { GazeTracker } from "./GazeTracker.js";
 import type {
   GazeLabels,
@@ -24,6 +25,24 @@ const DEFAULT_LABELS: GazeLabels = {
   toggleOn: "Göz kontrolünü aç",
   toggleOff: "Göz kontrolünü kapat",
   cameraDenied: "Kamera erişimi reddedildi — düğmeler klavye/fare ile kullanılabilir.",
+  recalibrate: "Yeniden kalibre et",
+  calibrationRequired: "Göz kontrolü için kalibrasyon gerekli",
+  calibTitle: "Kalibrasyon",
+  calibStep: "Adım {n} / {total}",
+  calibCenter: "Ekranın ortasındaki noktaya bakın.",
+  calibUp: "Yukarıdaki noktaya bakın.",
+  calibDown: "Aşağıdaki noktaya bakın.",
+  calibLeft: "Soldaki noktaya bakın.",
+  calibRight: "Sağdaki noktaya bakın.",
+  calibHold: "Böyle kalın…",
+  calibNoFace: "Yüzünüz görünmüyor. Kameraya dönün.",
+  calibWeak: "Gözlerinizi noktaya doğru biraz daha çevirin.",
+  calibWrongDir: "Parlayan noktaya bakın.",
+  calibUnstable: "Bakışınızı noktada sabit tutun.",
+  calibStruggle:
+    "Başınızı sabit tutup yalnızca gözlerinizi noktaya çevirin. Yüzünüzün iyi aydınlandığından emin olun.",
+  calibDone: "Kalibrasyon tamamlandı.",
+  calibCancel: "Vazgeç",
 };
 
 const ICONS: Record<Dir, string> = {
@@ -64,10 +83,11 @@ const CSS = `
 .gk-dot-state{width:9px;height:9px;border-radius:50%;background:#f59e0b}
 .gk-status[data-state="on"] .gk-dot-state{background:#22c55e}
 .gk-status[data-state="off"] .gk-dot-state{background:#ef4444}
-.gk-toggle{position:absolute;top:var(--gk-edge);right:var(--gk-edge);
-  pointer-events:auto;background:var(--gk-btn-bg);color:var(--gk-btn-fg);
+.gk-controls{position:absolute;top:var(--gk-edge);right:var(--gk-edge);
+  display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.gk-toggle,.gk-recal{pointer-events:auto;background:var(--gk-btn-bg);color:var(--gk-btn-fg);
   border:0;border-radius:999px;padding:8px 14px;font-size:13px;cursor:pointer}
-.gk-toggle:focus-visible{outline:3px solid #fff;outline-offset:3px}
+.gk-toggle:focus-visible,.gk-recal:focus-visible{outline:3px solid #fff;outline-offset:3px}
 .gk-gaze-dot{position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;
   border-radius:50%;background:var(--gk-accent);opacity:.85;pointer-events:none;
   box-shadow:0 0 0 3px rgba(255,255,255,.6)}
@@ -84,6 +104,8 @@ const CSS = `
 interface NavEvents extends Record<string, unknown> {
   action: { zone: ZoneDefinition; ctx: ZoneActionContext };
   enabledchange: boolean;
+  /** Kalibrasyon ekranı açıldı (true) / kapandı (false). */
+  calibratingchange: boolean;
 }
 
 export class GazeNavigator extends Emitter<NavEvents> {
@@ -96,6 +118,10 @@ export class GazeNavigator extends Emitter<NavEvents> {
   private scrollSpeed: number;
   private scrollTarget: Window | HTMLElement;
   private onAction?: GazeNavigatorOptions["onAction"];
+  private requireCalibration: boolean;
+  private theme?: Record<string, string>;
+  private calibration: GazeCalibration;
+  private calibrating: Promise<void> | null = null;
 
   private slots: Record<Dir, ZoneDefinition | null> = {
     up: null, down: null, left: null, right: null,
@@ -104,6 +130,7 @@ export class GazeNavigator extends Emitter<NavEvents> {
   private statusEl!: HTMLDivElement;
   private statusText!: HTMLSpanElement;
   private toggleEl!: HTMLButtonElement;
+  private recalEl!: HTMLButtonElement;
   private liveEl!: HTMLDivElement;
   private gazeDot: HTMLDivElement | null = null;
 
@@ -126,6 +153,14 @@ export class GazeNavigator extends Emitter<NavEvents> {
     this.scrollSpeed = options.scrollSpeed ?? 16;
     this.scrollTarget = options.scrollTarget ?? window;
     this.onAction = options.onAction;
+    this.requireCalibration = options.requireCalibration !== false;
+    this.theme = options.theme;
+    this.calibration = new GazeCalibration({
+      tracker: this.tracker,
+      labels: this.labels,
+      root: this.root,
+      theme: this.theme,
+    });
 
     this.buildZones(options);
     this.injectStyles();
@@ -143,12 +178,72 @@ export class GazeNavigator extends Emitter<NavEvents> {
     this.unsub.push(
       this.tracker.on("error", () => this.setStatus("off", this.labels.cameraDenied))
     );
+    // Telefon yan çevrildi ve o yön hiç kalibre edilmedi: kullanım sürüyorsa yeniden zorunlu.
+    this.unsub.push(
+      this.tracker.on("orientationchange", ({ calibrated }) => {
+        if (this.requireCalibration && !calibrated && this.enabled) {
+          void this.calibrate().catch(() => {});
+        }
+      })
+    );
     this.setStatus("off", this.labels.statusOff);
   }
 
   // --- kamuya açık kontrol ---
 
+  /**
+   * Göz kontrolünü açar. Kalibrasyon zorunluysa ve bu cihaz yönü için henüz
+   * yapılmadıysa önce kalibrasyon ekranı açılır; tamamlanınca kontrol açılır.
+   */
   enable(): void {
+    if (this.enabled || this.calibrating) return;
+    if (this.requireCalibration && !this.tracker.isCalibrated) {
+      void this.calibrate().catch(() => {});
+      return;
+    }
+    this.enableNow();
+  }
+
+  /**
+   * Kalibrasyon ekranını açar (ilk kez ya da yeniden). Tüm adımlar geçilince
+   * göz kontrolü açılır. "Vazgeç" ile iptal edilirse AbortError ile reddedilir;
+   * önceden geçerli bir kalibrasyon varsa ve kontrol açıksa açık kalır.
+   */
+  calibrate(): Promise<void> {
+    if (this.calibrating) return this.calibrating;
+    const wasEnabled = this.enabled;
+    if (wasEnabled) this.disableNow();
+    this.setStatus("searching", this.labels.calibTitle);
+    this.emit("calibratingchange", true);
+
+    this.calibrating = this.calibration
+      .run()
+      .then(
+        () => {
+          this.calibrating = null;
+          this.emit("calibratingchange", false);
+          this.enableNow();
+        },
+        (err: unknown) => {
+          this.calibrating = null;
+          this.emit("calibratingchange", false);
+          if (wasEnabled && (!this.requireCalibration || this.tracker.isCalibrated)) {
+            this.enableNow();
+          } else {
+            this.setStatus("off", this.labels.calibrationRequired);
+          }
+          throw err;
+        }
+      );
+    return this.calibrating;
+  }
+
+  /** Kalibrasyon ekranı açık mı. */
+  isCalibrating(): boolean {
+    return this.calibrating !== null;
+  }
+
+  private enableNow(): void {
     if (this.enabled) return;
     this.enabled = true;
     this.toggleEl.setAttribute("aria-pressed", "true");
@@ -158,6 +253,15 @@ export class GazeNavigator extends Emitter<NavEvents> {
   }
 
   disable(): void {
+    // Kalibrasyon sırasında kapatmak = kalibrasyonu iptal etmek.
+    if (this.calibrating) {
+      this.calibration.cancel();
+      return;
+    }
+    this.disableNow();
+  }
+
+  private disableNow(): void {
     if (!this.enabled) return;
     this.enabled = false;
     this.reset();
@@ -176,6 +280,7 @@ export class GazeNavigator extends Emitter<NavEvents> {
   }
 
   destroy(): void {
+    this.calibration.destroy();
     this.unsub.forEach((u) => u());
     this.unsub = [];
     this.host.remove();
@@ -269,7 +374,19 @@ export class GazeNavigator extends Emitter<NavEvents> {
     this.toggleEl.setAttribute("aria-pressed", "false");
     this.toggleEl.textContent = this.labels.toggleOn;
     this.toggleEl.addEventListener("click", () => this.toggle());
-    host.appendChild(this.toggleEl);
+
+    this.recalEl = document.createElement("button");
+    this.recalEl.type = "button";
+    this.recalEl.className = "gk-recal";
+    this.recalEl.textContent = this.labels.recalibrate;
+    this.recalEl.addEventListener("click", () => {
+      void this.calibrate().catch(() => {});
+    });
+
+    const controls = document.createElement("div");
+    controls.className = "gk-controls";
+    controls.append(this.toggleEl, this.recalEl);
+    host.appendChild(controls);
 
     this.liveEl = document.createElement("div");
     this.liveEl.className = "gk-sr";
@@ -289,6 +406,10 @@ export class GazeNavigator extends Emitter<NavEvents> {
   // --- döngü ---
 
   private onGaze = (sample: GazeSample): void => {
+    if (this.calibrating) {
+      if (this.gazeDot) this.gazeDot.style.display = "none";
+      return;
+    }
     this.updateGazeDot(sample);
     if (!this.enabled) return;
 

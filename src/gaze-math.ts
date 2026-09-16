@@ -243,6 +243,18 @@ export class AdaptiveCalibrator {
       if (typeof val === "number" && Number.isFinite(val)) this.p[k] = clamp(val, MIN_RANGE, MAX_RANGE);
     }
   }
+
+  /**
+   * Açık kalibrasyonun ölçtüğü profili uygula. Merkez az önce ölçüldüğü için
+   * ısınma atlanır; uyarlamalı öğrenme bu profilden devam eder.
+   */
+  setProfile(p: CalibrationProfile): void {
+    this.loadRanges(p);
+    if (Number.isFinite(p.cx)) this.p.cx = p.cx;
+    if (Number.isFinite(p.cy)) this.p.cy = p.cy;
+    this.learnFrames = WARMUP_FRAMES;
+    this.smooth = null;
+  }
 }
 
 /** Cihaz sınıfına göre başlangıç erişimi: dokunmatik/küçük ekran -> gözler az döner. */

@@ -13,6 +13,7 @@ import {
   matrixToEuler,
   type CalibrationProfile,
 } from "./gaze-math.js";
+import type { CalibrationResult } from "./calibration-core.js";
 import type { GazeSample, GazeTrackerOptions, HeadPose } from "./types.js";
 
 const DEFAULT_WASM =
@@ -34,6 +35,10 @@ interface TrackerEvents extends Record<string, unknown> {
   facelost: void;
   facefound: void;
   error: Error;
+  /** Cihaz yönü değişti; yeni yön için kalibrasyon yoksa `calibrated` false. */
+  orientationchange: { orientation: "portrait" | "landscape"; calibrated: boolean };
+  /** Açık kalibrasyon uygulandı ya da sıfırlandı. */
+  calibrationchange: { calibrated: boolean };
 }
 
 type ResolvedOptions = Required<
@@ -65,6 +70,11 @@ export class GazeTracker extends Emitter<TrackerEvents> {
   private dirty = false;
   private orientationMql: MediaQueryList | null = null;
   private currentOrientation: "portrait" | "landscape";
+  private learningPaused = false;
+  /** Bu yön için açık kalibrasyon tamamlandı mı. */
+  private calibratedFlag = false;
+  /** Kamera görüntüsü yatayda aynalı (kalibrasyonda öğrenilir). */
+  private flipX = false;
 
   constructor(options: GazeTrackerOptions = {}) {
     super();
@@ -115,18 +125,46 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     this.smoother.reset();
   }
 
+  /** Mevcut cihaz yönü için açık kalibrasyon tamamlanmış mı. */
+  get isCalibrated(): boolean {
+    return this.calibratedFlag;
+  }
+
+  /**
+   * Uyarlamalı öğrenmeyi duraklatır. Açık kalibrasyon sırasında kullanıcı
+   * bilerek kenarlara bakar; bu bakışlar merkez sanılmamalı.
+   */
+  setLearningPaused(paused: boolean): void {
+    this.learningPaused = paused;
+  }
+
+  /** Açık kalibrasyonun sonucunu uygular ve kaydeder. */
+  applyCalibration(result: CalibrationResult): void {
+    this.flipX = result.flipX;
+    this.calibrator.setProfile(result.profile);
+    this.smoother.reset();
+    this.calibratedFlag = true;
+    this.dirty = true;
+    this.saveCalibration(true);
+    this.emit("calibrationchange", { calibrated: true });
+  }
+
   /** Öğrenilmiş kalibrasyonu ve kaydını tamamen siler. */
   resetCalibration(): void {
     this.calibrator.reset();
     this.smoother.reset();
     this.dirty = false;
+    this.calibratedFlag = false;
+    this.flipX = false;
     const key = this.storageKey();
-    if (!key) return;
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      /* depolama erişilemez (gizli mod vb.) */
+    if (key) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* depolama erişilemez (gizli mod vb.) */
+      }
     }
+    this.emit("calibrationchange", { calibrated: false });
   }
 
   /** Modeli ve kamerayı hazırlar. Kamera izni burada istenir. */
@@ -228,7 +266,7 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     orientation: "portrait" | "landscape" = this.currentOrientation
   ): string | null {
     const p = this.opts.persistCalibration;
-    if (!p || !this.opts.autoRange) return null;
+    if (!p) return null;
     const prefix = typeof p === "string" ? p : STORAGE_PREFIX;
     return `${prefix}:${orientation}`;
   }
@@ -238,7 +276,12 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     if (!key) return;
     try {
       const raw = localStorage.getItem(key);
-      if (raw) this.calibrator.loadRanges(JSON.parse(raw));
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      this.calibrator.loadRanges(data);
+      // Eski (v0.1.x) kayıtlarda bu alan yok: zorunlu kalibrasyon bir kez yapılır.
+      this.calibratedFlag = data?.calibrated === true;
+      this.flipX = data?.flipX === true;
     } catch {
       /* bozuk kayıt ya da depolama yok: tohum değerlerle devam */
     }
@@ -252,7 +295,14 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     if (!key) return;
     const { left, right, up, down } = this.calibrator.profile;
     try {
-      localStorage.setItem(key, JSON.stringify({ left, right, up, down }));
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          left, right, up, down,
+          calibrated: this.calibratedFlag,
+          flipX: this.flipX,
+        })
+      );
       this.lastSave = now;
       this.dirty = false;
     } catch {
@@ -270,8 +320,14 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     this.saveCalibration(true); // hâlâ eski yönün anahtarına yazar
     this.currentOrientation = next;
     this.calibrator.reset();
+    this.calibratedFlag = false;
+    this.flipX = false;
     this.loadCalibration();
     this.recenter();
+    this.emit("orientationchange", {
+      orientation: next,
+      calibrated: this.calibratedFlag,
+    });
   };
 
   private watchOrientation(): void {
@@ -349,13 +405,15 @@ export class GazeTracker extends Emitter<TrackerEvents> {
       blendshapes.eyeBlinkLeft ?? 0,
       blendshapes.eyeBlinkRight ?? 0
     );
-    const learn = blink < BLINK_THRESHOLD;
+    const learn = !this.learningPaused && blink < BLINK_THRESHOLD;
 
-    const combined = combineEyeHead(
+    // input: kalibrasyon öncesi, ayna düzeltmesi öncesi sinyal (açık kalibrasyon bunu ölçer)
+    const input = combineEyeHead(
       blendshapesToGaze(blendshapes),
       head,
       this.opts.headInfluence
     );
+    const combined = this.flipX ? { x: -input.x, y: input.y } : input;
     const raw = this.calibrator.apply(combined, learn);
     const gaze = this.smoother.push(raw);
 
@@ -369,6 +427,8 @@ export class GazeTracker extends Emitter<TrackerEvents> {
       hasFace: true,
       gaze,
       raw,
+      input,
+      blink,
       head,
       blendshapes,
       confidence: 1,

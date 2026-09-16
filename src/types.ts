@@ -20,6 +20,10 @@ export interface GazeSample {
   gaze: GazeVector;
   /** Kalibre edilmiş, yumuşatma öncesi bakış vektörü ([-1,1]). */
   raw: GazeVector;
+  /** Kalibrasyon ve ayna düzeltmesi öncesi birleşik ham bakış (yüz varsa). */
+  input?: GazeVector;
+  /** İki gözün kırpma skorunun büyüğü 0..1 (yüz varsa). */
+  blink?: number;
   head?: HeadPose;
   /** MediaPipe blendshape skorları (categoryName -> 0..1). */
   blendshapes?: Record<string, number>;
@@ -117,6 +121,26 @@ export interface GazeLabels {
   toggleOn: string;
   toggleOff: string;
   cameraDenied: string;
+  /** Overlay'deki yeniden kalibrasyon düğmesi. */
+  recalibrate: string;
+  /** Kalibrasyon yapılmadan göz kontrolü açılamadığında durum metni. */
+  calibrationRequired: string;
+  /** Kalibrasyon ekranı. `{n}` ve `{total}` yer tutucudur. */
+  calibTitle: string;
+  calibStep: string;
+  calibCenter: string;
+  calibUp: string;
+  calibDown: string;
+  calibLeft: string;
+  calibRight: string;
+  calibHold: string;
+  calibNoFace: string;
+  calibWeak: string;
+  calibWrongDir: string;
+  calibUnstable: string;
+  calibStruggle: string;
+  calibDone: string;
+  calibCancel: string;
 }
 
 export interface GazeNavigatorOptions {
@@ -148,4 +172,10 @@ export interface GazeNavigatorOptions {
   onAction?: (zone: ZoneDefinition, ctx: ZoneActionContext) => void;
   /** Tema için CSS değişken override'ları, örn. { "--gk-accent": "#0a84ff" }. */
   theme?: Record<string, string>;
+  /**
+   * Göz kontrolü açılmadan önce adım adım kalibrasyon zorunlu. Cihaz yönü
+   * başına bir kez yapılır ve kaydedilir; overlay'deki düğmeyle tekrarlanır.
+   * Varsayılan true.
+   */
+  requireCalibration?: boolean;
 }

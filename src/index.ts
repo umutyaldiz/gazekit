@@ -4,6 +4,20 @@ import type { GazeNavigatorOptions, GazeTrackerOptions } from "./types.js";
 
 export { GazeTracker } from "./GazeTracker.js";
 export { GazeNavigator } from "./GazeNavigator.js";
+export { GazeCalibration } from "./GazeCalibration.js";
+export type { GazeCalibrationOptions } from "./GazeCalibration.js";
+export {
+  CalibrationSession,
+  CALIBRATION_STEPS,
+  MIN_DEFLECTION,
+} from "./calibration-core.js";
+export type {
+  CalibrationFrame,
+  CalibrationIssue,
+  CalibrationResult,
+  CalibrationState,
+  CalibrationStepId,
+} from "./calibration-core.js";
 export * from "./types.js";
 export {
   AdaptiveCalibrator,
@@ -31,8 +45,14 @@ export interface GazeKitOptions
 export interface GazeKitHandle {
   tracker: GazeTracker;
   navigator: GazeNavigator;
-  /** Kamera+model hazırlar, (autoStart ise) takibi başlatır. */
+  /**
+   * Kamera+model hazırlar, (autoStart ise) takibi başlatır. Kalibrasyon
+   * zorunluysa ve yapılmamışsa kalibrasyon ekranı tamamlanana kadar bekler;
+   * kullanıcı vazgeçerse AbortError ile reddedilir.
+   */
   start(): Promise<void>;
+  /** Kalibrasyonu yeniden yapar (ör. kendi "yeniden kalibre et" düğmen için). */
+  calibrate(): Promise<void>;
   /** Takibi durdurur ama kamerayı kapatmaz. */
   stop(): void;
   /** Her şeyi serbest bırakır. */
@@ -70,7 +90,15 @@ export function createGazeKit(options: GazeKitOptions = {}): GazeKitHandle {
     async start() {
       await tracker.init();
       tracker.start();
-      if (autoStart) navigator.enable();
+      if (!autoStart) return;
+      if (navOptions.requireCalibration !== false && !tracker.isCalibrated) {
+        await navigator.calibrate(); // tamamlanınca navigator kendini açar
+      } else {
+        navigator.enable();
+      }
+    },
+    calibrate() {
+      return navigator.calibrate();
     },
     stop() {
       tracker.stop();

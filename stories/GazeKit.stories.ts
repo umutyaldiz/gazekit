@@ -45,11 +45,13 @@ function buildDemo(
 
   wrap.innerHTML = `
     <h1>GazeKit demo</h1>
-    <p class="gkd-lede">Başlat'a basıp kamera iznini verin. Sonra ekranın
-      kenarlarına bakarak sayfada gezinin.</p>
+    <p class="gkd-lede">Başlat'a basıp kamera iznini verin. İlk kullanımda kısa
+      bir kalibrasyon yapılır: ekranda beliren beş noktaya sırayla bakın. Sonra
+      ekranın kenarlarına bakarak sayfada gezinin.</p>
     <button class="gkd-start" type="button">Başlat</button>
     <p class="gkd-note">Kamera izni tarayıcı tarafından, kullanıcı etkileşimi
-      sonrası istenir. Sağ üstteki düğmeden göz kontrolünü kapatabilirsiniz.</p>
+      sonrası istenir. Sağ üstteki düğmelerden göz kontrolünü kapatabilir ya da
+      yeniden kalibre edebilirsiniz.</p>
   `;
   LOREM.forEach((t) => {
     const s = document.createElement("p");
@@ -69,6 +71,8 @@ function buildDemo(
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
     startBtn.textContent = "Yükleniyor…";
+    // Önceki deneme (ör. kalibrasyondan vazgeçildi) kamerayı açık bırakmasın.
+    teardown();
     try {
       handle = createGazeKit({
         dwellTime: args.dwellTime,
@@ -92,9 +96,14 @@ function buildDemo(
       startBtn.textContent = "Çalışıyor";
       if (withReadout) attachReadout(root, handle);
     } catch (err) {
+      teardown();
       startBtn.disabled = false;
-      startBtn.textContent = "Tekrar dene";
-      console.error(err);
+      if (err instanceof Error && err.name === "AbortError") {
+        startBtn.textContent = "Kalibrasyon gerekli — tekrar başlat";
+      } else {
+        startBtn.textContent = "Tekrar dene";
+        console.error(err);
+      }
     }
   });
 
@@ -118,8 +127,11 @@ function attachReadout(root: HTMLElement, h: GazeKitHandle): void {
   recenter.addEventListener("click", () => h.tracker.recenter());
   const reset = document.createElement("button");
   reset.type = "button";
-  reset.textContent = "Kalibrasyonu sıfırla";
-  reset.addEventListener("click", () => h.tracker.resetCalibration());
+  reset.textContent = "Kaydı sil ve yeniden kalibre et";
+  reset.addEventListener("click", () => {
+    h.tracker.resetCalibration();
+    void h.calibrate().catch(() => {});
+  });
   actions.append(recenter, reset);
   box.append(text, actions);
   root.appendChild(box);

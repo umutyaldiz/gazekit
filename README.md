@@ -7,14 +7,15 @@
 [![Pages](https://github.com/umutyaldiz/gazekit/actions/workflows/pages.yml/badge.svg)](https://github.com/umutyaldiz/gazekit/actions/workflows/pages.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Kalibrasyonsuz, **cihaz üstü** göz takibiyle web sitelerinde eller serbest gezinme.
+**Cihaz üstü** göz takibiyle web sitelerinde eller serbest gezinme.
 Kullanıcının kamerasından yön kestirir; bir kenara bakınca o düğmenin halkası dolar
 ve eylem tetiklenir (yukarı/aşağı kaydırma, geri/ileri).
 
 - **Motor:** MediaPipe FaceLandmarker (WASM) — tüm modern tarayıcılarda çalışır.
 - **Gizlilik:** Görüntü tamamen tarayıcıda işlenir, hiçbir yere gönderilmez.
-- **Kalibrasyonsuz, uyarlamalı:** Kurulum ekranı yok. Kullanıcının göz menzilini
-  kullanırken öğrenir; telefonda da laptopta da aynı ayarla kenarlara ulaşılır.
+- **Tek seferlik kalibrasyon:** İlk kullanımda ~10 saniyelik, 5 adımlı zorunlu
+  kalibrasyon; cihaz başına kaydedilir. Sonrasında kullanırken kendini uyarlar;
+  telefonda da laptopta da aynı ayarla kenarlara ulaşılır.
 - **Erişilebilir:** Düğmeler gerçek `<button>` — klavye/fare ile de çalışır, ARIA
   etiketleri ve `aria-live` duyuruları var, `prefers-reduced-motion` desteklenir.
 - **Framework-bağımsız:** Saf TypeScript. Blade, vanilla, React, Vue farketmez.
@@ -43,8 +44,11 @@ const gk = createGazeKit({
 document.querySelector("#baslat")!.addEventListener("click", () => gk.start());
 ```
 
-`gk.start()` kamerayı açar, modeli yükler ve overlay'i etkinleştirir.
-`gk.stop()` takibi durdurur, `gk.destroy()` kamerayı ve DOM'u serbest bırakır.
+`gk.start()` kamerayı açar, modeli yükler; bu cihazda henüz kalibrasyon
+yapılmadıysa kalibrasyon ekranı tamamlanana kadar bekler, sonra overlay'i
+etkinleştirir. Kullanıcı kalibrasyondan vazgeçerse `start()` `AbortError` ile
+reddedilir ve göz kontrolü açılmaz. `gk.stop()` takibi durdurur, `gk.destroy()`
+kamerayı ve DOM'u serbest bırakır.
 
 ## Ayrık kullanım
 
@@ -105,9 +109,10 @@ export function useGazeKit(enabled: boolean) {
 | `dwellTime` | `900` | Tetikleme için gereken bakış süresi (ms) |
 | `threshold` | `0.4` | Bir yönün "seçili" sayılması için eşik (0–1) |
 | `scrollSpeed` | `16` | `hold` bölgelerinde kare başına kaydırma (px) |
+| `requireCalibration` | `true` | Göz kontrolü açılmadan önce 5 adımlı kalibrasyon zorunlu |
 | `autoRange` | `true` | Her yönün bakış menzilini öğrenir; kazancı cihaza göre ayarlar |
 | `autoCenter` | `true` | Nötr bakış noktasını öğrenip çıkarır |
-| `persistCalibration` | `true` | Öğrenilen menzili `localStorage`'a kaydeder (string = anahtar öneki) |
+| `persistCalibration` | `true` | Kalibrasyonu `localStorage`'a kaydeder; `false` ise her sayfa açılışında yeniden yapılır (string = anahtar öneki) |
 | `gain` | `2.4` | Sabit kazanç. **Yalnızca `autoRange: false` iken** kullanılır |
 | `smoothing` | `0.35` | EMA katsayısı; yüksek = daha tepkisel, düşük = daha yumuşak |
 | `headInfluence` | `0` | Kafa pozunun bakışa katkısı (0–1); menzili artırır |
@@ -122,29 +127,54 @@ Tetikleme çok kolay oluyorsa `threshold`'u yükselt. Tepki geç geliyorsa
 `dwellTime`'ı düşür, `smoothing`'i yükselt. Varsayılan `autoRange` açıkken
 `gain` ile oynamana gerek yok; kazanç her cihaz için otomatik öğrenilir.
 
-### Kalibrasyon nasıl çalışır
-Göz menzili cihaza göre çok değişir: telefonda ekran küçük bir açı kapladığı
-için göz ~0.2 döner, laptopta ~0.5. Sabit bir kazanç ikisinde birden doğru
-olamaz. GazeKit bu yüzden kullanırken şunları öğrenir:
+## Kalibrasyon
 
-- **Merkez:** Başlat'tan sonraki ~1 sn içinde nötr bakış noktası oturur
-  (telefona aşağı bakmak gibi ofsetler silinir). Sonra yalnızca bakış nötre
-  yakınken yavaşça güncellenir; bir kenara uzun bakmak merkezi kaydırmaz.
-- **Menzil:** Her yön (yukarı/aşağı/sağ/sol) ayrı öğrenilir, çünkü aşağı bakış
-  göz kapağı yüzünden genelde daha zayıftır. Göz kırpmaları öğrenmeye alınmaz.
-- **Kalıcılık:** Menzil cihaz başına kaydedilir; dikey ve yatay yön için ayrı
-  profil tutulur. İkinci ziyarette ısınma gerekmez.
+Göz menzili cihaza ve kişiye göre çok değişir: telefonda ekran küçük bir açı
+kapladığı için göz ~0.2 döner, laptopta ~0.5. Bu yüzden göz kontrolü ilk kez
+açılırken **zorunlu bir kalibrasyon** yapılır.
 
-Kullanıcı oturuşunu değiştirirse merkez kendiliğinden yeniden oturur (yüz
-kaybolup geri geldiğinde). Elle tetiklemek için:
+### Adımlar
+Ekranda sırayla beş nokta belirir: **merkez → yukarı → aşağı → sağ → sol**.
+Her adım ~1.2 sn geçerli bakış ister; toplam ~10 saniye sürer.
+
+Bir adım yalnızca şu koşullar sağlanınca geçilir; **atlama düğmesi yoktur**:
+- Yüz kamerada görünüyor,
+- bakış doğru yönde ve yeterince güçlü (çapraz ya da yarım bakış sayılmaz),
+- bakış sabit (merkez adımında gözler gezinirse ölçüm kabul edilmez).
+
+Kısa sapmalar (<200 ms) affedilir; daha uzunu yalnızca o adımın ilerlemesini
+sıfırlar, geçilmiş adımlar korunur. Göz kırpmak ilerlemeyi sıfırlamaz, yalnızca
+duraklatır. Adım uzun sürerse ekranda ek yönlendirme çıkar. Kamera görüntüsü
+aynalıysa (bazı sanal kameralar) bu da kalibrasyonda algılanıp düzeltilir.
+
+"Vazgeç" (ya da Escape) kalibrasyonu tamamen iptal eder: hiçbir ölçüm
+uygulanmaz ve göz kontrolü açılmaz. Sayfa, düğmeler üzerinden klavye/fare ile
+kullanılabilir kalır.
+
+### Ne zaman tekrarlanır
+- Kalibrasyon cihaz başına ve **dikey/yatay yön için ayrı** kaydedilir. Telefon
+  kullanım sırasında hiç kalibre edilmemiş yöne çevrilirse yeniden istenir.
+- Overlay'deki **"Yeniden kalibre et"** düğmesiyle her an tekrarlanabilir.
+  Yeniden kalibrasyondan vazgeçilirse önceki kalibrasyon geçerli kalır.
 
 ```ts
-gk.tracker.recenter();          // merkezi yeniden öğren, menzili koru
-gk.tracker.resetCalibration();  // her şeyi ve kaydı sil
+await gk.calibrate();           // kendi düğmen için: yeniden kalibre et
+gk.tracker.isCalibrated;        // bu cihaz yönü için kalibre mi
+gk.tracker.resetCalibration();  // kaydı sil (bir sonraki açılışta yine zorunlu)
 gk.tracker.calibration;         // { cx, cy, up, down, left, right }
 ```
 
-### Kendi model/WASM barındırma
+### Kalibrasyondan sonra
+Kalibrasyon başlangıç noktasıdır; kullanım sırasında ince ayar sürer:
+merkez yalnızca bakış nötre yakınken yavaşça güncellenir (bir kenara uzun bakmak
+merkezi kaydırmaz), menziller her yön için ayrı uyarlanır, kırpmalar öğrenmeye
+alınmaz. Kullanıcı yer değiştirirse (yüz kaybolup geri gelince) merkez
+kendiliğinden yeniden oturur; elle tetiklemek için `gk.tracker.recenter()`.
+
+Kütüphaneyi kendi akışında kullanıyorsan zorunluluğu `requireCalibration: false`
+ile kapatabilirsin; o zaman yalnızca kullanım sırasındaki uyarlama çalışır.
+
+## Kendi model/WASM barındırma
 CDN yerine kendi statiğine yönlendir:
 
 ```ts
