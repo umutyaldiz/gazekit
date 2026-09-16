@@ -1,6 +1,6 @@
 {
   "name": "gazekit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Kalibrasyonsuz, cihaz üstü göz takibiyle web sitelerinde erişilebilir gezinme (scroll, geri/ileri) — MediaPipe tabanlı, tüm tarayıcılarda çalışan, framework-bağımsız erişilebilirlik kütüphanesi.",
   "type": "module",
   "main": "./dist/index.cjs",
