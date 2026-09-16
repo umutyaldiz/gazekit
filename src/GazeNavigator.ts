@@ -425,8 +425,13 @@ export class GazeNavigator extends Emitter<NavEvents> {
       return;
     }
     this.gazeDot.style.display = "block";
-    const cx = (sample.gaze.x * 0.5 + 0.5) * window.innerWidth;
-    const cy = (0.5 - sample.gaze.y * 0.5) * window.innerHeight;
+    // Nokta .gk-root icinde absolute konumlanir; olcek de o kutudan alinmali.
+    // window.innerHeight mobilde dinamik URL cubugu yuzunden fixed kutunun
+    // yuksekligiyle uyusmaz, nokta asagi tasar.
+    const w = this.host.clientWidth || window.innerWidth;
+    const h = this.host.clientHeight || window.innerHeight;
+    const cx = (sample.gaze.x * 0.5 + 0.5) * w;
+    const cy = (0.5 - sample.gaze.y * 0.5) * h;
     this.gazeDot.style.left = `${cx}px`;
     this.gazeDot.style.top = `${cy}px`;
   }

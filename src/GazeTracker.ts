@@ -6,6 +6,7 @@ import {
 import { Emitter } from "./event-emitter.js";
 import {
   blendshapesToGaze,
+  CenterTracker,
   composeGaze,
   EmaSmoother,
   matrixToEuler,
@@ -42,6 +43,7 @@ export class GazeTracker extends Emitter<TrackerEvents> {
   private ownsVideo = false;
   private stream: MediaStream | null = null;
   private smoother: EmaSmoother;
+  private centerer: CenterTracker;
   private rafId = 0;
   private lastTs = -1;
   private hadFace = false;
@@ -57,9 +59,12 @@ export class GazeTracker extends Emitter<TrackerEvents> {
       gain: options.gain ?? 2.4,
       smoothing: options.smoothing ?? 0.35,
       headInfluence: options.headInfluence ?? 0,
+      autoCenter: options.autoCenter ?? true,
+      autoCenterRate: options.autoCenterRate ?? 0.02,
       cameraConstraints: options.cameraConstraints,
     };
     this.smoother = new EmaSmoother(this.opts.smoothing);
+    this.centerer = new CenterTracker(this.opts.autoCenterRate, 0.12);
   }
 
   get running(): boolean {
@@ -128,6 +133,7 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rafId = 0;
     this.smoother.reset();
+    this.centerer.reset();
   }
 
   /** Kamerayı ve modeli tamamen serbest bırakır. */
@@ -192,7 +198,8 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     const mtx = result.facialTransformationMatrixes;
     if (mtx && mtx.length > 0) head = matrixToEuler(mtx[0].data);
 
-    const eye = blendshapesToGaze(blendshapes);
+    const eye0 = blendshapesToGaze(blendshapes);
+    const eye = this.opts.autoCenter ? this.centerer.apply(eye0) : eye0;
     const raw = composeGaze(
       eye,
       head,

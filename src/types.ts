@@ -72,6 +72,14 @@ export interface GazeTrackerOptions {
   smoothing?: number;
   /** Kafa pozunun bakışa katkı ağırlığı 0..1. Varsayılan 0 (yalnız göz). */
   headInfluence?: number;
+  /**
+   * Nötr bakış noktasını otomatik izleyip çıkarır. Cihaz göz hizasının
+   * altındayken (özellikle telefon) işaretçinin alt yarıda takılı kalmasını
+   * önler. Varsayılan true.
+   */
+  autoCenter?: boolean;
+  /** Merkez izleyicinin uyum hızı 0..1. Düşük = yavaş. Varsayılan 0.02. */
+  autoCenterRate?: number;
   /** getUserMedia video kısıtları. */
   cameraConstraints?: MediaTrackConstraints;
 }

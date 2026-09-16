@@ -55,6 +55,37 @@ export class EmaSmoother {
   }
 }
 
+/**
+ * Notr bakis noktasini otomatik izler ve cikaritir (kalibrasyonsuz merkezleme).
+ *
+ * Telefonda cihaz goz hizasinin altinda tutuldugu icin goz blendshape'leri
+ * surekli "asagi" tarafa kaymis bir tabana oturur; bu taban cikarilmazsa
+ * isaretci hep alt yarida kalir.
+ *
+ * Taban YALNIZCA bakis notre yakinken guncellenir; boylece bir kenara uzun
+ * sure bakmak merkezi kendine cekmez (dwell sirasinda kayma olmaz).
+ */
+export class CenterTracker {
+  private base: GazeVector | null = null;
+
+  constructor(private alpha: number, private deadzone: number) {}
+
+  apply(eye: GazeVector): GazeVector {
+    if (!this.base) this.base = { ...eye };
+    const dx = eye.x - this.base.x;
+    const dy = eye.y - this.base.y;
+    if (Math.hypot(dx, dy) < this.deadzone) {
+      this.base.x += this.alpha * dx;
+      this.base.y += this.alpha * dy;
+    }
+    return { x: dx, y: dy };
+  }
+
+  reset(): void {
+    this.base = null;
+  }
+}
+
 const MAX_YAW = 0.6; // ~34° — kafa katkısı normalizasyonu
 const MAX_PITCH = 0.5;
 

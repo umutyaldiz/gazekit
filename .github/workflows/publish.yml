@@ -17,11 +17,14 @@ jobs:
         uses: actions/checkout@v4
 
       # Trusted Publishing, Node >= 22.14.0 gerektirir.
+      # DIKKAT: registry-url VERILMEMELI. Verilirse setup-node .npmrc'ye
+      # "_authToken=${NODE_AUTH_TOKEN}" yazar; token olmadigi icin bu bos
+      # string'e doner, npm "auth var" sanip OIDC degisimini hic baslatmaz
+      # ve publish 404 ile duser. Bkz. actions/setup-node#1551
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: "https://registry.npmjs.org"
           cache: npm
 
       # Node 22 npm 10.x ile geliyor; OIDC için npm >= 11.5.1 şart.

@@ -15,6 +15,7 @@ interface Args {
   scrollSpeed: number;
   gain: number;
   headInfluence: number;
+  autoCenter: boolean;
   showGazeDot: boolean;
   enableBack: boolean;
   enableForward: boolean;
@@ -74,6 +75,7 @@ function buildDemo(
         scrollSpeed: args.scrollSpeed,
         gain: args.gain,
         headInfluence: args.headInfluence,
+        autoCenter: args.autoCenter,
         showGazeDot: args.showGazeDot,
         zones: {
           up: true,
@@ -118,8 +120,9 @@ const meta: Meta<Args> = {
     dwellTime: { control: { type: "range", min: 300, max: 2000, step: 50 } },
     threshold: { control: { type: "range", min: 0.15, max: 0.7, step: 0.05 } },
     scrollSpeed: { control: { type: "range", min: 4, max: 40, step: 2 } },
-    gain: { control: { type: "range", min: 1, max: 4, step: 0.2 } },
+    gain: { control: { type: "range", min: 1, max: 6, step: 0.2 } },
     headInfluence: { control: { type: "range", min: 0, max: 1, step: 0.1 } },
+    autoCenter: { control: "boolean" },
     showGazeDot: { control: "boolean" },
     enableBack: { control: "boolean" },
     enableForward: { control: "boolean" },
@@ -130,6 +133,7 @@ const meta: Meta<Args> = {
     scrollSpeed: 16,
     gain: 2.4,
     headInfluence: 0,
+    autoCenter: true,
     showGazeDot: false,
     enableBack: true,
     enableForward: true,
@@ -162,4 +166,22 @@ export const HataAyiklama: Story = {
 /** Tüm parametreleri Controls panelinden ayarla. */
 export const Playground: Story = {
   render: (args) => buildDemo(args),
+};
+
+/**
+ * Telefon icin on ayar. Cihaz goz hizasinin altinda tutuldugu ve ekran kucuk
+ * bir gorme acisi kapladigi icin goz donusu masaustune gore cok daha kucuk
+ * kalir; bu yuzden kazanc yuksek ve kafa katkisi acik.
+ */
+export const Mobil: Story = {
+  name: "Mobil",
+  args: {
+    gain: 5,
+    headInfluence: 0.4,
+    threshold: 0.35,
+    dwellTime: 1000,
+    autoCenter: true,
+    showGazeDot: true,
+  },
+  render: (args) => buildDemo(args, {}, true),
 };

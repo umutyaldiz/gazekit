@@ -7,6 +7,7 @@ export { GazeNavigator } from "./GazeNavigator.js";
 export * from "./types.js";
 export {
   blendshapesToGaze,
+  CenterTracker,
   matrixToEuler,
   composeGaze,
   EmaSmoother,
