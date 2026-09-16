@@ -1,5 +1,12 @@
 # GazeKit 👁️
 
+[![Canlı Demo](https://img.shields.io/badge/👁️_Canlı_Demo-gazekit-6f42c1?style=for-the-badge&labelColor=1b1f23)](https://umutyaldiz.github.io/gazekit/)
+
+[![npm](https://img.shields.io/npm/v/gazekit?color=cb3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/gazekit)
+[![CI](https://github.com/umutyaldiz/gazekit/actions/workflows/ci.yml/badge.svg)](https://github.com/umutyaldiz/gazekit/actions/workflows/ci.yml)
+[![Pages](https://github.com/umutyaldiz/gazekit/actions/workflows/pages.yml/badge.svg)](https://github.com/umutyaldiz/gazekit/actions/workflows/pages.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
 Kalibrasyonsuz, **cihaz üstü** göz takibiyle web sitelerinde eller serbest gezinme.
 Kullanıcının kamerasından yön kestirir; bir kenara bakınca o düğmenin halkası dolar
 ve eylem tetiklenir (yukarı/aşağı kaydırma, geri/ileri).
@@ -121,14 +128,19 @@ createGazeKit({
 });
 ```
 
-## Storybook
+## Demo
+
+👉 **[umutyaldiz.github.io/gazekit](https://umutyaldiz.github.io/gazekit/)** — tarayıcıda,
+kurulum yapmadan deneyin. Kamera izni istenecek; görüntü cihazınızdan dışarı çıkmaz.
+
+Örnekler: yalnızca kaydırma, tam gezinme, hata ayıklama (canlı x/y), Playground.
+
+Yerelde çalıştırmak için:
 
 ```bash
 npm install
 npm run storybook
 ```
-
-Örnekler: yalnızca kaydırma, tam gezinme, hata ayıklama (canlı x/y), Playground.
 
 ## Tarayıcı desteği
 WebGL2 + `getUserMedia` gerektirir. Chrome, Edge, Firefox, Safari (masaüstü ve

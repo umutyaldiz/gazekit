@@ -26,14 +26,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Release etiketi (vX.Y.Z) ile package.json sürümü uyuşmalı.
+      # Release etiketi ile package.json sürümü uyuşmalı.
+      # Kabul edilen biçimler: "v0.1.0", "0.1.0", "gazekit@0.1.0"
       - name: Verify version matches tag
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          RAW="$GITHUB_REF_NAME"
+          TAG="${RAW##*@}"   # "gazekit@0.1.0" -> "0.1.0"
+          TAG="${TAG#v}"     # "v0.1.0"        -> "0.1.0"
           PKG=$(node -p "require('./package.json').version")
-          echo "tag=$TAG pkg=$PKG"
+          echo "tag=$RAW normalized=$TAG pkg=$PKG"
           if [ "$TAG" != "$PKG" ]; then
-            echo "::error::Release etiketi ($TAG) ile package.json sürümü ($PKG) uyuşmuyor."
+            echo "::error::Release etiketi ($RAW -> $TAG) ile package.json sürümü ($PKG) uyuşmuyor."
             exit 1
           fi
 
