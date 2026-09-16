@@ -54,34 +54,6 @@ jobs:
       - name: Build
         run: npm run build
 
-      # OIDC neden calismadigini kesinlestirmek icin. Sir basmaz; yalnizca
-      # degiskenlerin VAR/YOK oldugunu ve npm surumunu gosterir.
-      - name: OIDC teshis
-        run: |
-          echo "npm            : $(npm --version)   (>= 11.5.1 olmali)"
-          echo "node           : $(node --version)  (>= 22.14.0 olmali)"
-          echo "id-token URL   : ${ACTIONS_ID_TOKEN_REQUEST_URL:+VAR}${ACTIONS_ID_TOKEN_REQUEST_URL:-YOK}"
-          echo "id-token TOKEN : ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+VAR}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-YOK}"
-          echo "repo           : $GITHUB_REPOSITORY"
-          echo "workflow file  : $(basename "$GITHUB_WORKFLOW_REF" | cut -d@ -f1)"
-          echo "registry       : $(npm config get registry)"
-          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          echo "npmrc yolu     : $npmrc"
-          if [ -f "$npmrc" ]; then
-            echo "--- npmrc (deger maskeli) ---"
-            sed -E 's/(=).*/***/' "$npmrc"
-          else
-            echo "npmrc dosyasi yok (OIDC icin dogru durum)"
-          fi
-
-      # Savunma amacli: herhangi bir adim .npmrc'ye authToken yazdiysa temizle.
-      # Bos bir _authToken satiri bile npm'in OIDC degisimini atlamasina yeter.
-      - name: npmrc temizle
-        run: |
-          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          [ -f "$npmrc" ] && sed -i '/_authToken/d' "$npmrc" || true
-          echo "temizlendi"
-
       # Kimlik doğrulama OIDC ile yapılır: NODE_AUTH_TOKEN / NPM_TOKEN yok.
       # Provenance, trusted publishing'de otomatik üretilir.
       - name: Publish
