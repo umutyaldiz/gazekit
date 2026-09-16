@@ -56,14 +56,11 @@ export class EmaSmoother {
 }
 
 /**
- * Notr bakis noktasini otomatik izler ve cikaritir (kalibrasyonsuz merkezleme).
+ * Notr bakis noktasini izleyip cikarir.
  *
- * Telefonda cihaz goz hizasinin altinda tutuldugu icin goz blendshape'leri
- * surekli "asagi" tarafa kaymis bir tabana oturur; bu taban cikarilmazsa
- * isaretci hep alt yarida kalir.
- *
- * Taban YALNIZCA bakis notre yakinken guncellenir; boylece bir kenara uzun
- * sure bakmak merkezi kendine cekmez (dwell sirasinda kayma olmaz).
+ * @deprecated `AdaptiveCalibrator` kullanin. Deadzone ham birimde sabit
+ * oldugu icin telefonda (menzil ~0.2) menzilin ~%60'ina denk gelir ve
+ * kismi bakislari birkac saniyede notr sanip yutar.
  */
 export class CenterTracker {
   private base: GazeVector | null = null;
@@ -86,8 +83,200 @@ export class CenterTracker {
   }
 }
 
+/** Öğrenilen kalibrasyon profili. Değerler ham blendshape biriminde. */
+export interface CalibrationProfile {
+  /** Nötr bakış merkezi. */
+  cx: number;
+  cy: number;
+  /** Merkezden her yöne tipik erişim (>0). Asimetrik: aşağı bakış göz kapağı yüzünden genelde zayıftır. */
+  left: number;
+  right: number;
+  up: number;
+  down: number;
+}
+
+export interface AdaptiveCalibratorOptions {
+  /** Nötr merkezi öğren. */
+  center: boolean;
+  /** Erişimi (menzili) öğren. false ise `fixedGain` ile sabit ölçekler. */
+  range: boolean;
+  /** range=false iken kullanılan sabit kazanç. */
+  fixedGain: number;
+  /** Başlangıç erişimi (cihaz sınıfına göre tohum). */
+  seedRange: number;
+}
+
+// --- ayar sabitleri (hepsi normalize uzayda ya da oran; cihazdan bağımsız) ---
+/** Isınma: ilk N öğrenme karesinde merkez koşulsuz ve hızlı oturur. */
+const WARMUP_FRAMES = 45;
+const WARMUP_RATE = 0.1;
+/** Oturmuş durumda merkez, yalnızca bu normalize yarıçap içindeyken güncellenir. */
+const CENTER_ZONE = 0.25;
+const CENTER_RATE = 0.02;
+/**
+ * Kilitlenmeye karşı emniyet: bölge dışında da çok yavaş merkez kayması.
+ * Yarı ömür ~60 sn (60fps). Uzun dwell'leri ancak ~%10 aşındırır.
+ */
+const DRIFT_RATE = 0.0002;
+/** Yeni tepeye hızlı genişle, tepeye varmayan bakışta yavaş daral -> yüksek persentil takibi. */
+const GROW = 0.08;
+const SHRINK = 0.004;
+/** O yöne anlamlı bakış sayılması için erişimin bu oranı aşılmalı (daralma kapısı). */
+const SHRINK_GATE = 0.35;
+/** Öğrenilen erişimin bu kadarı kenar (1.0) sayılır: zorlanmadan ulaşılsın. */
+const REACH = 0.85;
+/** Erişim sınırları (ham birim). Alt sınır gürültünün kenara büyümesini engeller. */
+const MIN_RANGE = 0.08;
+const MAX_RANGE = 0.8;
+/** Öğrenme için iç yumuşatma (çıkışı etkilemez; tek kare gürültü menzili şişirmesin). */
+const LEARN_ALPHA = 0.3;
+
+type RangeKey = "left" | "right" | "up" | "down";
+
+/**
+ * Kalibrasyonsuz uyarlamalı kalibrasyon.
+ *
+ * Neden gerekli: göz blendshape menzili cihaza göre ~2.5 kat değişir
+ * (telefon ~0.2, laptop ~0.5). Ham birimde yazılmış her sabit eşik bir
+ * cihazda yanlış kalır. Bu sınıf merkezi ve her yönün erişimini öğrenir,
+ * tüm eşikleri erişime oranla tanımlar; böylece aynı ayar her cihazda
+ * aynı davranır.
+ */
+export class AdaptiveCalibrator {
+  private p: CalibrationProfile;
+  private learnFrames = 0;
+  private smooth: GazeVector | null = null;
+
+  constructor(private o: AdaptiveCalibratorOptions, initial?: Partial<CalibrationProfile>) {
+    const s = clamp(o.seedRange, MIN_RANGE, MAX_RANGE);
+    this.p = { cx: 0, cy: 0, left: s, right: s, up: s, down: s, ...initial };
+  }
+
+  /**
+   * @param v    Birleşik ham bakış (x: + sağ, y: + yukarı)
+   * @param learn false ise (ör. göz kırpma) yalnızca dönüştürür, öğrenmez.
+   * @returns [-1, 1] aralığında normalize bakış
+   */
+  apply(v: GazeVector, learn = true): GazeVector {
+    const out = this.transform(v);
+    if (learn) this.learn(v);
+    return out;
+  }
+
+  private transform(v: GazeVector): GazeVector {
+    const p = this.p;
+    const dx = v.x - p.cx;
+    const dy = v.y - p.cy;
+    const sx = this.o.range ? 1 / ((dx >= 0 ? p.right : p.left) * REACH) : this.o.fixedGain;
+    const sy = this.o.range ? 1 / ((dy >= 0 ? p.up : p.down) * REACH) : this.o.fixedGain;
+    return { x: clamp(dx * sx, -1, 1), y: clamp(dy * sy, -1, 1) };
+  }
+
+  private learn(v: GazeVector): void {
+    // öğrenme, tek kare gürültüye karşı hafif yumuşatılmış sinyal üzerinden
+    if (!this.smooth) this.smooth = { ...v };
+    else {
+      this.smooth.x += LEARN_ALPHA * (v.x - this.smooth.x);
+      this.smooth.y += LEARN_ALPHA * (v.y - this.smooth.y);
+    }
+    const s = this.smooth;
+    const p = this.p;
+    const warm = this.learnFrames < WARMUP_FRAMES;
+    this.learnFrames++;
+
+    if (this.o.center) {
+      const dx = s.x - p.cx;
+      const dy = s.y - p.cy;
+      let rate: number;
+      if (warm) {
+        // Başlat'a basan kullanıcı ekrana bakıyordur: koşulsuz otur.
+        // Bölge kapısı burada kilitlenmeye yol açardı (ofset büyükse
+        // nötr bakış bölge dışı görünür ve merkez hiç öğrenilmez).
+        rate = WARMUP_RATE;
+      } else {
+        const n = this.transform(s);
+        rate = Math.hypot(n.x, n.y) < CENTER_ZONE ? CENTER_RATE : DRIFT_RATE;
+      }
+      p.cx += rate * dx;
+      p.cy += rate * dy;
+    }
+
+    // Isınmada ofset henüz çıkmadığı için erişim öğrenilmez (sahte tepe olur).
+    if (this.o.range && !warm) {
+      const dx = s.x - p.cx;
+      const dy = s.y - p.cy;
+      this.learnRange(dx >= 0 ? "right" : "left", Math.abs(dx));
+      this.learnRange(dy >= 0 ? "up" : "down", Math.abs(dy));
+    }
+  }
+
+  private learnRange(k: RangeKey, mag: number): void {
+    const cur = this.p[k];
+    let next = cur;
+    if (mag > cur) next = cur + GROW * (mag - cur);
+    else if (mag > SHRINK_GATE * cur) next = cur - SHRINK * (cur - mag);
+    // aksi halde nötrde ya da başka yöne bakıyor: tut
+    this.p[k] = clamp(next, MIN_RANGE, MAX_RANGE);
+  }
+
+  /** Merkezi yeniden öğren (duruş değişti, yüz kaybolup geri geldi...). Erişim korunur. */
+  recenter(): void {
+    this.learnFrames = 0;
+    this.smooth = null;
+  }
+
+  /** Her şeyi tohum değerlere döndür. */
+  reset(): void {
+    const s = clamp(this.o.seedRange, MIN_RANGE, MAX_RANGE);
+    this.p = { cx: 0, cy: 0, left: s, right: s, up: s, down: s };
+    this.recenter();
+  }
+
+  get profile(): CalibrationProfile {
+    return { ...this.p };
+  }
+
+  /** Kayıtlı erişimi yükle. Merkez yüklenmez: oturuşa bağlıdır, her oturumda ısınmayla öğrenilir. */
+  loadRanges(r: Pick<CalibrationProfile, RangeKey>): void {
+    for (const k of ["left", "right", "up", "down"] as RangeKey[]) {
+      const val = r[k];
+      if (typeof val === "number" && Number.isFinite(val)) this.p[k] = clamp(val, MIN_RANGE, MAX_RANGE);
+    }
+  }
+}
+
+/** Cihaz sınıfına göre başlangıç erişimi: dokunmatik/küçük ekran -> gözler az döner. */
+export function defaultRangeSeed(): number {
+  try {
+    const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+    const small = typeof screen !== "undefined" && Math.min(screen.width, screen.height) < 600;
+    return coarse || small ? 0.18 : 0.35;
+  } catch {
+    return 0.3;
+  }
+}
+
 const MAX_YAW = 0.6; // ~34° — kafa katkısı normalizasyonu
 const MAX_PITCH = 0.5;
+/** Kafa katkısını göz ölçeğine getirir: headInfluence=1 iken tipik göz erişimi kadar. */
+const HEAD_SCALE = 0.4;
+
+/**
+ * Göz ve kafa pozunu ham birimde birleştirir (kalibrasyon öncesi, kazançsız).
+ * Ölçekleme ve merkezleme sonra `AdaptiveCalibrator` tarafından yapılır.
+ */
+export function combineEyeHead(
+  eye: GazeVector,
+  head: HeadPose | undefined,
+  headInfluence: number
+): GazeVector {
+  if (!head || headInfluence <= 0) return { x: eye.x, y: eye.y };
+  const k = headInfluence * HEAD_SCALE;
+  return {
+    x: eye.x + k * clamp(head.yaw / MAX_YAW, -1, 1),
+    y: eye.y + k * clamp(head.pitch / MAX_PITCH, -1, 1),
+  };
+}
 
 /** Göz vektörünü kazançla ölçekler ve (opsiyonel) kafa pozunu karıştırır. */
 export function composeGaze(

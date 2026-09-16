@@ -5,11 +5,13 @@ import {
 } from "@mediapipe/tasks-vision";
 import { Emitter } from "./event-emitter.js";
 import {
+  AdaptiveCalibrator,
   blendshapesToGaze,
-  CenterTracker,
-  composeGaze,
+  combineEyeHead,
+  defaultRangeSeed,
   EmaSmoother,
   matrixToEuler,
+  type CalibrationProfile,
 } from "./gaze-math.js";
 import type { GazeSample, GazeTrackerOptions, HeadPose } from "./types.js";
 
@@ -17,6 +19,14 @@ const DEFAULT_WASM =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 const DEFAULT_MODEL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+
+const STORAGE_PREFIX = "gazekit:calib:v1";
+/** Kayıt en fazla bu sıklıkla yazılır (ms). */
+const SAVE_INTERVAL = 2000;
+/** Göz kırpma bu skorun üstündeyse kare öğrenmeye alınmaz (kırpma "aşağı" tepe gibi görünür). */
+const BLINK_THRESHOLD = 0.45;
+/** Yüz bu süreden uzun kaybolup geri gelirse duruş değişmiş sayılır, merkez yeniden öğrenilir (ms). */
+const RECENTER_AFTER_LOST = 1000;
 
 interface TrackerEvents extends Record<string, unknown> {
   ready: void;
@@ -26,28 +36,35 @@ interface TrackerEvents extends Record<string, unknown> {
   error: Error;
 }
 
+type ResolvedOptions = Required<
+  Omit<GazeTrackerOptions, "video" | "cameraConstraints">
+> & {
+  video?: HTMLVideoElement;
+  cameraConstraints?: MediaTrackConstraints;
+};
+
 /**
  * Kamerayı açar, MediaPipe FaceLandmarker'ı VIDEO modunda çalıştırır ve
  * her karede yön kestirimi (GazeSample) yayınlar. Tüm işlem cihaz üstünde;
  * hiçbir görüntü ağa gönderilmez.
  */
 export class GazeTracker extends Emitter<TrackerEvents> {
-  private opts: Required<
-    Omit<GazeTrackerOptions, "video" | "cameraConstraints">
-  > & {
-    video?: HTMLVideoElement;
-    cameraConstraints?: MediaTrackConstraints;
-  };
+  private opts: ResolvedOptions;
   private landmarker: FaceLandmarker | null = null;
   private video: HTMLVideoElement | null = null;
   private ownsVideo = false;
   private stream: MediaStream | null = null;
   private smoother: EmaSmoother;
-  private centerer: CenterTracker;
+  private calibrator: AdaptiveCalibrator;
   private rafId = 0;
   private lastTs = -1;
   private hadFace = false;
+  private lostAt = -1;
   private _running = false;
+  private lastSave = 0;
+  private dirty = false;
+  private orientationMql: MediaQueryList | null = null;
+  private currentOrientation: "portrait" | "landscape";
 
   constructor(options: GazeTrackerOptions = {}) {
     super();
@@ -60,11 +77,20 @@ export class GazeTracker extends Emitter<TrackerEvents> {
       smoothing: options.smoothing ?? 0.35,
       headInfluence: options.headInfluence ?? 0,
       autoCenter: options.autoCenter ?? true,
+      autoRange: options.autoRange ?? true,
+      persistCalibration: options.persistCalibration ?? true,
       autoCenterRate: options.autoCenterRate ?? 0.02,
       cameraConstraints: options.cameraConstraints,
     };
+    this.currentOrientation = readOrientation();
     this.smoother = new EmaSmoother(this.opts.smoothing);
-    this.centerer = new CenterTracker(this.opts.autoCenterRate, 0.12);
+    this.calibrator = new AdaptiveCalibrator({
+      center: this.opts.autoCenter,
+      range: this.opts.autoRange,
+      fixedGain: this.opts.gain,
+      seedRange: defaultRangeSeed(),
+    });
+    this.loadCalibration();
   }
 
   get running(): boolean {
@@ -75,22 +101,41 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     return this.video;
   }
 
+  /** Şu anki öğrenilmiş kalibrasyon profili (hata ayıklama / gösterim için). */
+  get calibration(): CalibrationProfile {
+    return this.calibrator.profile;
+  }
+
+  /**
+   * Nötr merkezi yeniden öğren. Kullanıcı oturuşunu değiştirdiğinde çağır.
+   * Öğrenilmiş menzil korunur; yalnızca merkez ~1 sn içinde yeniden oturur.
+   */
+  recenter(): void {
+    this.calibrator.recenter();
+    this.smoother.reset();
+  }
+
+  /** Öğrenilmiş kalibrasyonu ve kaydını tamamen siler. */
+  resetCalibration(): void {
+    this.calibrator.reset();
+    this.smoother.reset();
+    this.dirty = false;
+    const key = this.storageKey();
+    if (!key) return;
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* depolama erişilemez (gizli mod vb.) */
+    }
+  }
+
   /** Modeli ve kamerayı hazırlar. Kamera izni burada istenir. */
   async init(): Promise<void> {
     try {
       const fileset = await FilesetResolver.forVisionTasks(
         this.opts.wasmBasePath
       );
-      this.landmarker = await FaceLandmarker.createFromOptions(fileset, {
-        baseOptions: {
-          modelAssetPath: this.opts.modelAssetPath,
-          delegate: this.opts.delegate,
-        },
-        runningMode: "VIDEO",
-        numFaces: 1,
-        outputFaceBlendshapes: true,
-        outputFacialTransformationMatrixes: true,
-      });
+      this.landmarker = await this.createLandmarker(fileset);
 
       this.video =
         this.opts.video ??
@@ -114,6 +159,7 @@ export class GazeTracker extends Emitter<TrackerEvents> {
       });
       this.video.srcObject = this.stream;
       await this.video.play();
+      this.watchOrientation();
       this.emit("ready", undefined);
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -122,9 +168,34 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     }
   }
 
+  /**
+   * GPU delegate bazı cihazlarda desteklenmez (bazı Android WebView'ler,
+   * eski iOS). O durumda CPU ile yeniden dener; aksi halde model hiç yüklenmez.
+   */
+  private async createLandmarker(
+    fileset: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>
+  ): Promise<FaceLandmarker> {
+    const build = (delegate: "GPU" | "CPU") =>
+      FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: this.opts.modelAssetPath, delegate },
+        runningMode: "VIDEO",
+        numFaces: 1,
+        outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: true,
+      });
+    if (this.opts.delegate === "CPU") return build("CPU");
+    try {
+      return await build("GPU");
+    } catch {
+      return build("CPU");
+    }
+  }
+
   start(): void {
     if (this._running || !this.landmarker || !this.video) return;
     this._running = true;
+    // Durdurulup yeniden başlatıldıysa kullanıcı yer değiştirmiş olabilir.
+    this.recenter();
     this.loop();
   }
 
@@ -133,12 +204,13 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rafId = 0;
     this.smoother.reset();
-    this.centerer.reset();
+    this.saveCalibration(true);
   }
 
   /** Kamerayı ve modeli tamamen serbest bırakır. */
   destroy(): void {
     this.stop();
+    this.unwatchOrientation();
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     if (this.video) {
@@ -149,6 +221,74 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     this.landmarker = null;
     this.clear();
   }
+
+  // --- kalıcılık ---
+
+  private storageKey(
+    orientation: "portrait" | "landscape" = this.currentOrientation
+  ): string | null {
+    const p = this.opts.persistCalibration;
+    if (!p || !this.opts.autoRange) return null;
+    const prefix = typeof p === "string" ? p : STORAGE_PREFIX;
+    return `${prefix}:${orientation}`;
+  }
+
+  private loadCalibration(): void {
+    const key = this.storageKey();
+    if (!key) return;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) this.calibrator.loadRanges(JSON.parse(raw));
+    } catch {
+      /* bozuk kayıt ya da depolama yok: tohum değerlerle devam */
+    }
+  }
+
+  private saveCalibration(force = false): void {
+    if (!this.dirty) return;
+    const now = performance.now();
+    if (!force && now - this.lastSave < SAVE_INTERVAL) return;
+    const key = this.storageKey();
+    if (!key) return;
+    const { left, right, up, down } = this.calibrator.profile;
+    try {
+      localStorage.setItem(key, JSON.stringify({ left, right, up, down }));
+      this.lastSave = now;
+      this.dirty = false;
+    } catch {
+      /* kota dolu / gizli mod: sessizce geç */
+    }
+  }
+
+  /**
+   * Telefon yan çevrilince göz menzili değişir (ekranın görme açısı farklı).
+   * Her yön için ayrı profil tutulur: eskisini kendi anahtarına yaz, yenisini yükle.
+   */
+  private onOrientationChange = (): void => {
+    const next = readOrientation();
+    if (next === this.currentOrientation) return;
+    this.saveCalibration(true); // hâlâ eski yönün anahtarına yazar
+    this.currentOrientation = next;
+    this.calibrator.reset();
+    this.loadCalibration();
+    this.recenter();
+  };
+
+  private watchOrientation(): void {
+    try {
+      this.orientationMql = matchMedia("(orientation: portrait)");
+      this.orientationMql.addEventListener("change", this.onOrientationChange);
+    } catch {
+      this.orientationMql = null;
+    }
+  }
+
+  private unwatchOrientation(): void {
+    this.orientationMql?.removeEventListener("change", this.onOrientationChange);
+    this.orientationMql = null;
+  }
+
+  // --- döngü ---
 
   private loop = (): void => {
     if (!this._running || !this.landmarker || !this.video) return;
@@ -172,6 +312,7 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     if (!bsList || bsList.length === 0) {
       if (this.hadFace) {
         this.hadFace = false;
+        this.lostAt = ts;
         this.emit("facelost", undefined);
       }
       this.emit("gaze", {
@@ -186,6 +327,10 @@ export class GazeTracker extends Emitter<TrackerEvents> {
 
     if (!this.hadFace) {
       this.hadFace = true;
+      // Uzun kayıp: kullanıcı muhtemelen yer değiştirdi, merkezi yeniden öğren.
+      if (this.lostAt >= 0 && ts - this.lostAt > RECENTER_AFTER_LOST) {
+        this.recenter();
+      }
       this.emit("facefound", undefined);
     }
 
@@ -198,15 +343,26 @@ export class GazeTracker extends Emitter<TrackerEvents> {
     const mtx = result.facialTransformationMatrixes;
     if (mtx && mtx.length > 0) head = matrixToEuler(mtx[0].data);
 
-    const eye0 = blendshapesToGaze(blendshapes);
-    const eye = this.opts.autoCenter ? this.centerer.apply(eye0) : eye0;
-    const raw = composeGaze(
-      eye,
+    // Kırpma anında göz blendshape'leri "aşağı" tepe gibi görünür;
+    // öğrenilirse aşağı menzili sahte şekilde şişer.
+    const blink = Math.max(
+      blendshapes.eyeBlinkLeft ?? 0,
+      blendshapes.eyeBlinkRight ?? 0
+    );
+    const learn = blink < BLINK_THRESHOLD;
+
+    const combined = combineEyeHead(
+      blendshapesToGaze(blendshapes),
       head,
-      this.opts.gain,
       this.opts.headInfluence
     );
+    const raw = this.calibrator.apply(combined, learn);
     const gaze = this.smoother.push(raw);
+
+    if (learn) {
+      this.dirty = true;
+      this.saveCalibration();
+    }
 
     this.emit("gaze", {
       timestamp: ts,
@@ -218,4 +374,12 @@ export class GazeTracker extends Emitter<TrackerEvents> {
       confidence: 1,
     });
   };
+}
+
+function readOrientation(): "portrait" | "landscape" {
+  try {
+    return matchMedia("(orientation: portrait)").matches ? "portrait" : "landscape";
+  } catch {
+    return "landscape";
+  }
 }

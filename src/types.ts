@@ -18,7 +18,7 @@ export interface GazeSample {
   hasFace: boolean;
   /** Yumuşatılmış (smoothed) bakış vektörü. */
   gaze: GazeVector;
-  /** Ham (yumuşatma öncesi) bakış vektörü. */
+  /** Kalibre edilmiş, yumuşatma öncesi bakış vektörü ([-1,1]). */
   raw: GazeVector;
   head?: HeadPose;
   /** MediaPipe blendshape skorları (categoryName -> 0..1). */
@@ -66,7 +66,11 @@ export interface GazeTrackerOptions {
   modelAssetPath?: string;
   /** GPU tercih; başarısız olursa CPU'ya düşer. */
   delegate?: "GPU" | "CPU";
-  /** Göz sinyalini [-1,1] aralığına ölçekleyen kazanç. Varsayılan 2.4. */
+  /**
+   * Sabit kazanç. YALNIZCA `autoRange: false` iken kullanılır.
+   * `autoRange` açıkken yok sayılır: kazanç her cihaz için öğrenilir.
+   * Varsayılan 2.4.
+   */
   gain?: number;
   /** EMA yumuşatma katsayısı 0..1. Yüksek = daha tepkisel, az yumuşak. Varsayılan 0.35. */
   smoothing?: number;
@@ -78,7 +82,23 @@ export interface GazeTrackerOptions {
    * önler. Varsayılan true.
    */
   autoCenter?: boolean;
-  /** Merkez izleyicinin uyum hızı 0..1. Düşük = yavaş. Varsayılan 0.02. */
+  /**
+   * Her yönün (sağ/sol/yukarı/aşağı) gerçek bakış menzilini öğrenip [-1,1]'e
+   * normalize eder. Göz menzili telefon ile laptop arasında ~2.5 kat
+   * değiştiği için sabit `gain` her cihazda doğru olamaz; bu seçenek aynı
+   * ayarın her cihazda aynı davranmasını sağlar. Varsayılan true.
+   */
+  autoRange?: boolean;
+  /**
+   * Öğrenilen menzili localStorage'a kaydeder; sonraki ziyarette ısınma
+   * gerekmez. Dikey/yatay yön için ayrı profil tutulur. string verilirse
+   * anahtar öneki olarak kullanılır. Varsayılan true.
+   */
+  persistCalibration?: boolean | string;
+  /**
+   * @deprecated Yok sayılır. Merkez uyumu artık menzile oranla otomatik
+   * ayarlanıyor (bkz. `autoRange`).
+   */
   autoCenterRate?: number;
   /** getUserMedia video kısıtları. */
   cameraConstraints?: MediaTrackConstraints;

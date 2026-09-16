@@ -16,6 +16,7 @@ interface Args {
   gain: number;
   headInfluence: number;
   autoCenter: boolean;
+  autoRange: boolean;
   showGazeDot: boolean;
   enableBack: boolean;
   enableForward: boolean;
@@ -76,6 +77,7 @@ function buildDemo(
         gain: args.gain,
         headInfluence: args.headInfluence,
         autoCenter: args.autoCenter,
+        autoRange: args.autoRange,
         showGazeDot: args.showGazeDot,
         zones: {
           up: true,
@@ -88,6 +90,7 @@ function buildDemo(
       });
       await handle.start();
       startBtn.textContent = "Çalışıyor";
+      if (withReadout) attachReadout(root, handle);
     } catch (err) {
       startBtn.disabled = false;
       startBtn.textContent = "Tekrar dene";
@@ -95,23 +98,45 @@ function buildDemo(
     }
   });
 
-  if (withReadout) {
-    const readout = document.createElement("div");
-    readout.className = "gkd-readout";
-    readout.textContent = "bakış bekleniyor…";
-    root.appendChild(readout);
-    const iv = setInterval(() => {
-      if (!handle) return;
-      handle.tracker.on("gaze", (s) => {
-        readout.textContent =
-          `yüz: ${s.hasFace ? "var" : "yok"}\n` +
-          `x: ${s.gaze.x.toFixed(2)}  y: ${s.gaze.y.toFixed(2)}`;
-      });
-      clearInterval(iv);
-    }, 300);
-  }
-
   return root;
+}
+
+/**
+ * Canlı bakış + öğrenilen kalibrasyon göstergesi. Gerçek cihazda
+ * uyarlamalı kalibrasyonun nasıl oturduğunu görmek için.
+ */
+function attachReadout(root: HTMLElement, h: GazeKitHandle): void {
+  const box = document.createElement("div");
+  box.className = "gkd-readout";
+  const text = document.createElement("pre");
+  text.textContent = "bakış bekleniyor…";
+  const actions = document.createElement("div");
+  actions.className = "gkd-readout-actions";
+  const recenter = document.createElement("button");
+  recenter.type = "button";
+  recenter.textContent = "Merkezle";
+  recenter.addEventListener("click", () => h.tracker.recenter());
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.textContent = "Kalibrasyonu sıfırla";
+  reset.addEventListener("click", () => h.tracker.resetCalibration());
+  actions.append(recenter, reset);
+  box.append(text, actions);
+  root.appendChild(box);
+
+  // 60 fps metin güncellemesi okunmaz; ~10 Hz yeterli.
+  let last = 0;
+  h.tracker.on("gaze", (s) => {
+    if (s.timestamp - last < 100) return;
+    last = s.timestamp;
+    const c = h.tracker.calibration;
+    const f = (n: number) => (n >= 0 ? " " : "") + n.toFixed(2);
+    text.textContent =
+      `yüz    : ${s.hasFace ? "var" : "yok"}\n` +
+      `bakış  : x ${f(s.gaze.x)}  y ${f(s.gaze.y)}\n` +
+      `merkez : (${f(c.cx)}, ${f(c.cy)})\n` +
+      `menzil : ↑${c.up.toFixed(2)} ↓${c.down.toFixed(2)} ←${c.left.toFixed(2)} →${c.right.toFixed(2)}`;
+  });
 }
 
 const meta: Meta<Args> = {
@@ -120,9 +145,13 @@ const meta: Meta<Args> = {
     dwellTime: { control: { type: "range", min: 300, max: 2000, step: 50 } },
     threshold: { control: { type: "range", min: 0.15, max: 0.7, step: 0.05 } },
     scrollSpeed: { control: { type: "range", min: 4, max: 40, step: 2 } },
-    gain: { control: { type: "range", min: 1, max: 6, step: 0.2 } },
+    gain: {
+      control: { type: "range", min: 1, max: 6, step: 0.2 },
+      description: "Yalnızca autoRange kapalıyken kullanılır.",
+    },
     headInfluence: { control: { type: "range", min: 0, max: 1, step: 0.1 } },
     autoCenter: { control: "boolean" },
+    autoRange: { control: "boolean" },
     showGazeDot: { control: "boolean" },
     enableBack: { control: "boolean" },
     enableForward: { control: "boolean" },
@@ -134,6 +163,7 @@ const meta: Meta<Args> = {
     gain: 2.4,
     headInfluence: 0,
     autoCenter: true,
+    autoRange: true,
     showGazeDot: false,
     enableBack: true,
     enableForward: true,
@@ -166,22 +196,4 @@ export const HataAyiklama: Story = {
 /** Tüm parametreleri Controls panelinden ayarla. */
 export const Playground: Story = {
   render: (args) => buildDemo(args),
-};
-
-/**
- * Telefon icin on ayar. Cihaz goz hizasinin altinda tutuldugu ve ekran kucuk
- * bir gorme acisi kapladigi icin goz donusu masaustune gore cok daha kucuk
- * kalir; bu yuzden kazanc yuksek ve kafa katkisi acik.
- */
-export const Mobil: Story = {
-  name: "Mobil",
-  args: {
-    gain: 5,
-    headInfluence: 0.4,
-    threshold: 0.35,
-    dwellTime: 1000,
-    autoCenter: true,
-    showGazeDot: true,
-  },
-  render: (args) => buildDemo(args, {}, true),
 };

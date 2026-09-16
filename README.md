@@ -13,7 +13,8 @@ ve eylem tetiklenir (yukarı/aşağı kaydırma, geri/ileri).
 
 - **Motor:** MediaPipe FaceLandmarker (WASM) — tüm modern tarayıcılarda çalışır.
 - **Gizlilik:** Görüntü tamamen tarayıcıda işlenir, hiçbir yere gönderilmez.
-- **Kalibrasyonsuz:** Göz blendshape'lerinden yön çıkarır; kurulum ekranı yok.
+- **Kalibrasyonsuz, uyarlamalı:** Kurulum ekranı yok. Kullanıcının göz menzilini
+  kullanırken öğrenir; telefonda da laptopta da aynı ayarla kenarlara ulaşılır.
 - **Erişilebilir:** Düğmeler gerçek `<button>` — klavye/fare ile de çalışır, ARIA
   etiketleri ve `aria-live` duyuruları var, `prefers-reduced-motion` desteklenir.
 - **Framework-bağımsız:** Saf TypeScript. Blade, vanilla, React, Vue farketmez.
@@ -104,7 +105,10 @@ export function useGazeKit(enabled: boolean) {
 | `dwellTime` | `900` | Tetikleme için gereken bakış süresi (ms) |
 | `threshold` | `0.4` | Bir yönün "seçili" sayılması için eşik (0–1) |
 | `scrollSpeed` | `16` | `hold` bölgelerinde kare başına kaydırma (px) |
-| `gain` | `2.4` | Göz sinyalini [-1,1]'e ölçekleyen kazanç (hassasiyet) |
+| `autoRange` | `true` | Her yönün bakış menzilini öğrenir; kazancı cihaza göre ayarlar |
+| `autoCenter` | `true` | Nötr bakış noktasını öğrenip çıkarır |
+| `persistCalibration` | `true` | Öğrenilen menzili `localStorage`'a kaydeder (string = anahtar öneki) |
+| `gain` | `2.4` | Sabit kazanç. **Yalnızca `autoRange: false` iken** kullanılır |
 | `smoothing` | `0.35` | EMA katsayısı; yüksek = daha tepkisel, düşük = daha yumuşak |
 | `headInfluence` | `0` | Kafa pozunun bakışa katkısı (0–1); menzili artırır |
 | `showGazeDot` | `false` | Canlı bakış noktasını göster |
@@ -114,9 +118,31 @@ export function useGazeKit(enabled: boolean) {
 | `theme` | — | CSS değişken override'ları, örn. `{ "--gk-accent": "#0a84ff" }` |
 
 ### Hassasiyet ayarı
-Tetikleme çok kolay oluyorsa `threshold`'u yükselt veya `gain`'i düşür.
-Tepki geç geliyorsa `dwellTime`'ı düşür, `smoothing`'i yükselt. Kafasını çok
-oynatan kullanıcılar için `headInfluence: 0.3` menzili genişletir.
+Tetikleme çok kolay oluyorsa `threshold`'u yükselt. Tepki geç geliyorsa
+`dwellTime`'ı düşür, `smoothing`'i yükselt. Varsayılan `autoRange` açıkken
+`gain` ile oynamana gerek yok; kazanç her cihaz için otomatik öğrenilir.
+
+### Kalibrasyon nasıl çalışır
+Göz menzili cihaza göre çok değişir: telefonda ekran küçük bir açı kapladığı
+için göz ~0.2 döner, laptopta ~0.5. Sabit bir kazanç ikisinde birden doğru
+olamaz. GazeKit bu yüzden kullanırken şunları öğrenir:
+
+- **Merkez:** Başlat'tan sonraki ~1 sn içinde nötr bakış noktası oturur
+  (telefona aşağı bakmak gibi ofsetler silinir). Sonra yalnızca bakış nötre
+  yakınken yavaşça güncellenir; bir kenara uzun bakmak merkezi kaydırmaz.
+- **Menzil:** Her yön (yukarı/aşağı/sağ/sol) ayrı öğrenilir, çünkü aşağı bakış
+  göz kapağı yüzünden genelde daha zayıftır. Göz kırpmaları öğrenmeye alınmaz.
+- **Kalıcılık:** Menzil cihaz başına kaydedilir; dikey ve yatay yön için ayrı
+  profil tutulur. İkinci ziyarette ısınma gerekmez.
+
+Kullanıcı oturuşunu değiştirirse merkez kendiliğinden yeniden oturur (yüz
+kaybolup geri geldiğinde). Elle tetiklemek için:
+
+```ts
+gk.tracker.recenter();          // merkezi yeniden öğren, menzili koru
+gk.tracker.resetCalibration();  // her şeyi ve kaydı sil
+gk.tracker.calibration;         // { cx, cy, up, down, left, right }
+```
 
 ### Kendi model/WASM barındırma
 CDN yerine kendi statiğine yönlendir:

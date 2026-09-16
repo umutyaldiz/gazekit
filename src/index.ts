@@ -6,12 +6,19 @@ export { GazeTracker } from "./GazeTracker.js";
 export { GazeNavigator } from "./GazeNavigator.js";
 export * from "./types.js";
 export {
+  AdaptiveCalibrator,
   blendshapesToGaze,
   CenterTracker,
+  combineEyeHead,
+  defaultRangeSeed,
   matrixToEuler,
   composeGaze,
   EmaSmoother,
   clamp,
+} from "./gaze-math.js";
+export type {
+  AdaptiveCalibratorOptions,
+  CalibrationProfile,
 } from "./gaze-math.js";
 
 export interface GazeKitOptions
@@ -45,6 +52,7 @@ export function createGazeKit(options: GazeKitOptions = {}): GazeKitHandle {
     // tracker opsiyonları
     video, wasmBasePath, modelAssetPath, delegate,
     gain, smoothing, headInfluence, cameraConstraints,
+    autoCenter, autoRange, persistCalibration, autoCenterRate,
     // navigator opsiyonları geri kalanı
     ...navOptions
   } = options;
@@ -52,6 +60,7 @@ export function createGazeKit(options: GazeKitOptions = {}): GazeKitHandle {
   const tracker = new GazeTracker({
     video, wasmBasePath, modelAssetPath, delegate,
     gain, smoothing, headInfluence, cameraConstraints,
+    autoCenter, autoRange, persistCalibration, autoCenterRate,
   });
   const navigator = new GazeNavigator({ ...navOptions, tracker });
 
