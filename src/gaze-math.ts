@@ -125,9 +125,17 @@ const SHRINK = 0.004;
 const SHRINK_GATE = 0.35;
 /** Öğrenilen erişimin bu kadarı kenar (1.0) sayılır: zorlanmadan ulaşılsın. */
 const REACH = 0.85;
-/** Erişim sınırları (ham birim). Alt sınır gürültünün kenara büyümesini engeller. */
+/**
+ * Erişim sınırları (ham birim). Tahmine dayalı öğrenmede alt sınır gürültünün
+ * kenara büyümesini engeller. Açık kalibrasyon gerçekten daha küçük bir erişim
+ * ölçtüyse (ör. zayıf aşağı bakış) o yön için alt sınır ölçümden türetilir;
+ * aksi halde tam bakış bile kenara ulaşamazdı.
+ */
 const MIN_RANGE = 0.08;
+const ABS_MIN_RANGE = 0.02;
 const MAX_RANGE = 0.8;
+/** Ölçülen erişim, öğrenmeyle en fazla bu oranına kadar daralabilir. */
+const MEASURED_FLOOR_RATIO = 0.6;
 /** Öğrenme için iç yumuşatma (çıkışı etkilemez; tek kare gürültü menzili şişirmesin). */
 const LEARN_ALPHA = 0.3;
 
@@ -146,6 +154,10 @@ export class AdaptiveCalibrator {
   private p: CalibrationProfile;
   private learnFrames = 0;
   private smooth: GazeVector | null = null;
+  /** Yön başına erişim alt sınırı. */
+  private floor: Record<RangeKey, number> = {
+    left: MIN_RANGE, right: MIN_RANGE, up: MIN_RANGE, down: MIN_RANGE,
+  };
 
   constructor(private o: AdaptiveCalibratorOptions, initial?: Partial<CalibrationProfile>) {
     const s = clamp(o.seedRange, MIN_RANGE, MAX_RANGE);
@@ -216,7 +228,7 @@ export class AdaptiveCalibrator {
     if (mag > cur) next = cur + GROW * (mag - cur);
     else if (mag > SHRINK_GATE * cur) next = cur - SHRINK * (cur - mag);
     // aksi halde nötrde ya da başka yöne bakıyor: tut
-    this.p[k] = clamp(next, MIN_RANGE, MAX_RANGE);
+    this.p[k] = clamp(next, this.floor[k], MAX_RANGE);
   }
 
   /** Merkezi yeniden öğren (duruş değişti, yüz kaybolup geri geldi...). Erişim korunur. */
@@ -229,6 +241,7 @@ export class AdaptiveCalibrator {
   reset(): void {
     const s = clamp(this.o.seedRange, MIN_RANGE, MAX_RANGE);
     this.p = { cx: 0, cy: 0, left: s, right: s, up: s, down: s };
+    this.floor = { left: MIN_RANGE, right: MIN_RANGE, up: MIN_RANGE, down: MIN_RANGE };
     this.recenter();
   }
 
@@ -236,11 +249,18 @@ export class AdaptiveCalibrator {
     return { ...this.p };
   }
 
-  /** Kayıtlı erişimi yükle. Merkez yüklenmez: oturuşa bağlıdır, her oturumda ısınmayla öğrenilir. */
+  /**
+   * Kayıtlı ya da ölçülmüş erişimi yükle. Merkez yüklenmez: oturuşa bağlıdır,
+   * her oturumda ısınmayla öğrenilir. Küçük (ölçülmüş) değerler korunur ve o
+   * yönün alt sınırı ölçüme göre ayarlanır.
+   */
   loadRanges(r: Pick<CalibrationProfile, RangeKey>): void {
     for (const k of ["left", "right", "up", "down"] as RangeKey[]) {
       const val = r[k];
-      if (typeof val === "number" && Number.isFinite(val)) this.p[k] = clamp(val, MIN_RANGE, MAX_RANGE);
+      if (typeof val !== "number" || !Number.isFinite(val)) continue;
+      const v = clamp(val, ABS_MIN_RANGE, MAX_RANGE);
+      this.p[k] = v;
+      this.floor[k] = clamp(v * MEASURED_FLOOR_RATIO, ABS_MIN_RANGE, MIN_RANGE);
     }
   }
 

@@ -5,6 +5,7 @@ import {
   type CalibrationState,
   type CalibrationStepId,
 } from "./calibration-core.js";
+import { defaultRangeSeed } from "./gaze-math.js";
 import type { GazeTracker } from "./GazeTracker.js";
 import type { GazeLabels, GazeSample } from "./types.js";
 
@@ -15,6 +16,8 @@ export interface GazeCalibrationOptions {
   root?: HTMLElement;
   /** CSS değişken override'ları (navigator ile aynı tema). */
   theme?: Record<string, string>;
+  /** Ham ölçümleri (sapma, eşik, kırpma, kafa açısı) ekranda göster. */
+  debug?: boolean;
 }
 
 const STYLE_ID = "gazekit-calibration-styles";
@@ -52,7 +55,16 @@ const CSS = `
 .gk-cal[data-step="down"] .gk-cal-target{left:50%;top:calc(100% - var(--gk-bottom) - var(--gk-target)/2)}
 .gk-cal[data-step="left"] .gk-cal-target{left:calc(var(--gk-left) + var(--gk-target)/2);top:50%}
 .gk-cal[data-step="right"] .gk-cal-target{left:calc(100% - var(--gk-right) - var(--gk-target)/2);top:50%}
-.gk-cal[data-done] .gk-cal-target{display:none}
+.gk-cal[data-done] .gk-cal-target,.gk-cal[data-done] .gk-cal-gaze{display:none}
+.gk-cal-gaze{position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;
+  border-radius:50%;pointer-events:none;background:#f59e0b;
+  box-shadow:0 0 0 3px rgba(15,23,42,.9),0 0 0 5px rgba(255,255,255,.7)}
+.gk-cal-gaze[data-ok]{background:#22c55e}
+.gk-cal-gaze[data-dim]{opacity:.45}
+.gk-cal-debug{position:absolute;left:var(--gk-left);bottom:var(--gk-bottom);margin:0;
+  font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;
+  background:rgba(0,0,0,.55);padding:6px 8px;border-radius:6px;max-width:calc(100% - 140px);
+  overflow:hidden}
 .gk-cal-cancel{position:absolute;right:var(--gk-right);bottom:var(--gk-bottom);
   background:rgba(255,255,255,.12);color:#f8fafc;border:1px solid rgba(255,255,255,.3);
   border-radius:999px;padding:8px 14px;font:inherit;font-size:13px;cursor:pointer}
@@ -61,6 +73,7 @@ const CSS = `
   clip:rect(0 0 0 0);white-space:nowrap;border:0}
 @media (prefers-reduced-motion:no-preference){
   .gk-cal-target{transition:left .35s ease,top .35s ease}
+  .gk-cal-gaze{transition:left .08s linear,top .08s linear,background-color .15s}
   .gk-cal-target::after{animation:gk-cal-pulse 1.2s ease-in-out infinite}
   @keyframes gk-cal-pulse{50%{transform:scale(.6)}}
 }`;
@@ -69,6 +82,10 @@ const CSS = `
 const DONE_MS = 900;
 /** İpucu bu süre kararlı kalmadan değişmez; her karede titremesin (ms). */
 const HINT_STABLE_MS = 250;
+/** Canlı noktanın yumuşatması (yalnızca görüntü; kabul kararını etkilemez). */
+const DOT_ALPHA = 0.35;
+/** Hedef halkasının yarıçapı + kenar boşluğu: nokta ±1'de hedefin merkezine oturur (px). */
+const TARGET_INSET = 18 + 28;
 
 let uid = 0;
 
@@ -82,7 +99,8 @@ export class GazeCalibration {
   private labels: GazeLabels;
   private root: HTMLElement;
   private theme?: Record<string, string>;
-  private session = new CalibrationSession();
+  private debug: boolean;
+  private session: CalibrationSession;
 
   private el: HTMLDivElement | null = null;
   private stepEl!: HTMLParagraphElement;
@@ -93,6 +111,9 @@ export class GazeCalibration {
   private targetEl!: HTMLDivElement;
   private cancelEl!: HTMLButtonElement;
   private liveEl!: HTMLDivElement;
+  private gazeEl!: HTMLDivElement;
+  private debugEl: HTMLPreElement | null = null;
+  private dot: { x: number; y: number } | null = null;
 
   private pending: Promise<CalibrationResult> | null = null;
   private resolve?: (r: CalibrationResult) => void;
@@ -112,6 +133,8 @@ export class GazeCalibration {
     this.labels = options.labels;
     this.root = options.root ?? document.body;
     this.theme = options.theme;
+    this.debug = options.debug === true;
+    this.session = new CalibrationSession({ seedRange: defaultRangeSeed() });
   }
 
   get active(): boolean {
@@ -129,6 +152,7 @@ export class GazeCalibration {
       this.reject = reject;
     });
     this.session.restart();
+    this.dot = null;
     this.lastIndex = -1;
     this.struggleAnnounced = false;
     this.mount();
@@ -160,6 +184,7 @@ export class GazeCalibration {
       input: s.input ?? s.raw,
     });
     this.render(st, s.timestamp);
+    this.renderGaze(st, s);
     if (!st.done) return;
 
     this.unsub?.();
@@ -223,7 +248,20 @@ export class GazeCalibration {
     this.liveEl.setAttribute("aria-live", "assertive");
     this.liveEl.setAttribute("aria-atomic", "true");
 
-    el.append(panel, this.targetEl, this.cancelEl, this.liveEl);
+    // Canlı bakış noktası: kullanıcı gözünün nereye gittiğini ve karenin
+    // sayılıp sayılmadığını (yeşil/sarı) görür.
+    this.gazeEl = document.createElement("div");
+    this.gazeEl.className = "gk-cal-gaze";
+    this.gazeEl.setAttribute("aria-hidden", "true");
+    this.gazeEl.hidden = true;
+
+    el.append(panel, this.targetEl, this.gazeEl, this.cancelEl, this.liveEl);
+    if (this.debug) {
+      this.debugEl = document.createElement("pre");
+      this.debugEl.className = "gk-cal-debug";
+      this.debugEl.setAttribute("aria-hidden", "true");
+      el.appendChild(this.debugEl);
+    }
     el.addEventListener("keydown", this.onKeyDown);
     this.root.appendChild(el);
     this.el = el;
@@ -289,6 +327,45 @@ export class GazeCalibration {
         this.struggleAnnounced = true;
         this.announce(this.labels.calibStruggle);
       }
+    }
+  }
+
+  private renderGaze(st: CalibrationState, s: GazeSample): void {
+    if (!this.el) return;
+    const p = this.session.preview;
+    if (!p) {
+      this.gazeEl.hidden = true;
+      this.dot = null;
+    } else {
+      this.dot = this.dot
+        ? { x: this.dot.x + DOT_ALPHA * (p.x - this.dot.x), y: this.dot.y + DOT_ALPHA * (p.y - this.dot.y) }
+        : { ...p };
+      const w = this.el.clientWidth || window.innerWidth;
+      const h = this.el.clientHeight || window.innerHeight;
+      const cx = w / 2;
+      const cy = h / 2;
+      // ±1 -> kenardaki hedeflerin merkezi
+      const sx = Math.max(cx - TARGET_INSET, 1);
+      const sy = Math.max(cy - TARGET_INSET, 1);
+      const px = Math.min(Math.max(cx + this.dot.x * sx, 11), w - 11);
+      const py = Math.min(Math.max(cy - this.dot.y * sy, 11), h - 11);
+      this.gazeEl.style.left = `${px}px`;
+      this.gazeEl.style.top = `${py}px`;
+      this.gazeEl.hidden = false;
+      this.gazeEl.toggleAttribute("data-ok", st.issue === "ok");
+      this.gazeEl.toggleAttribute("data-dim", st.issue === "settling" || st.issue === "blink");
+    }
+
+    if (this.debugEl) {
+      const m = this.session.metrics;
+      const f = (n: number) => (n >= 0 ? " " : "") + n.toFixed(3);
+      const deg = (r: number) => ((r * 180) / Math.PI).toFixed(0).padStart(4);
+      this.debugEl.textContent =
+        `adım   : ${st.step} (${st.issue})\n` +
+        `sapma  :${f(m.along)}  eşik ${m.min.toFixed(3)}\n` +
+        `çapraz :${f(m.cross)}\n` +
+        `kırpma : ${m.blink.toFixed(2)}\n` +
+        (s.head ? `kafa   : yaw${deg(s.head.yaw)}°  pitch${deg(s.head.pitch)}°` : "kafa   : —");
     }
   }
 

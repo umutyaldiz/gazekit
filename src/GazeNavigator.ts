@@ -160,6 +160,8 @@ export class GazeNavigator extends Emitter<NavEvents> {
       labels: this.labels,
       root: this.root,
       theme: this.theme,
+      // hata ayıklama noktası açıksa kalibrasyonda ham ölçümleri de göster
+      debug: options.showGazeDot === true,
     });
 
     this.buildZones(options);

@@ -142,10 +142,23 @@ Bir adım yalnızca şu koşullar sağlanınca geçilir; **atlama düğmesi yokt
 - bakış doğru yönde ve yeterince güçlü (çapraz ya da yarım bakış sayılmaz),
 - bakış sabit (merkez adımında gözler gezinirse ölçüm kabul edilmez).
 
-Kısa sapmalar (<200 ms) affedilir; daha uzunu yalnızca o adımın ilerlemesini
-sıfırlar, geçilmiş adımlar korunur. Göz kırpmak ilerlemeyi sıfırlamaz, yalnızca
-duraklatır. Adım uzun sürerse ekranda ek yönlendirme çıkar. Kamera görüntüsü
-aynalıysa (bazı sanal kameralar) bu da kalibrasyonda algılanıp düzeltilir.
+Kalibrasyon sırasında ekranda **canlı bir bakış noktası** gözünün nereye
+gittiğini gösterir: yeşilse o an sayılıyor, sarıysa sayılmıyor (ipucu metni
+nedenini söyler).
+
+Kısa sapmalar (<200 ms) affedilir; daha uzun sapmalar ilerlemeyi sıfırlamaz,
+kademeli geri alır. Böylece bakışı arada kaçan ama çoğunlukla hedefte tutan
+kullanıcı da geçer, çoğunlukla başka yere bakan geçemez. Geçilmiş adımlar
+korunur. Göz kırpmak ilerlemeyi yalnızca duraklatır. Aşağı bakınca göz kapağının
+inmesi (ve doğal olarak düşük göz kapakları) kırpma sayılmaz; gözler tamamen
+kapalıysa kare sayılmaz. Geçme eşiği cihazın ölçülen gürültüsüne göre ayarlanır
+ve kaydedilen menziller gürültünün altında kalmaz; zayıf bakışlı kullanıcılar da
+kalibre olur ama düz bakarken bölge kendiliğinden tetiklenmez. Adım uzun sürerse
+ek yönlendirme çıkar. Kamera görüntüsü aynalıysa bu da algılanıp düzeltilir.
+
+`showGazeDot: true` iken kalibrasyon ekranında ham ölçümler de (sapma, eşik,
+çapraz sapma, kırpma skoru, kafa açısı) gösterilir; bir adımda takılan cihazı
+teşhis etmek için.
 
 "Vazgeç" (ya da Escape) kalibrasyonu tamamen iptal eder: hiçbir ölçüm
 uygulanmaz ve göz kontrolü açılmaz. Sayfa, düğmeler üzerinden klavye/fare ile
