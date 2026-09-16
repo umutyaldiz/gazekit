@@ -1,0 +1,50 @@
+name: Publish to npm
+
+# Her GitHub Release yayınlandığında (Release published) çalışır.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # npm provenance için gerekli
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Release etiketi (vX.Y.Z) ile package.json sürümü uyuşmalı.
+      - name: Verify version matches tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          echo "tag=$TAG pkg=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Release etiketi ($TAG) ile package.json sürümü ($PKG) uyuşmuyor."
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # Provenance açık repo gerektirir. Repo özelse --provenance'ı kaldırın.
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

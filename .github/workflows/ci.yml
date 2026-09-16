@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      # Yalnız yayınlanan (prod) bağımlılıkları denetler; dev-server araç
+      # zafiyetleri (Storybook/vite) pipeline'ı kırmaz.
+      - run: npm audit --omit=dev --audit-level=high

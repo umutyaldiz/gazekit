@@ -1,0 +1,65 @@
+{
+  "name": "gazekit",
+  "version": "0.1.0",
+  "description": "Kalibrasyonsuz, cihaz üstü göz takibiyle web sitelerinde erişilebilir gezinme (scroll, geri/ileri) — MediaPipe tabanlı, tüm tarayıcılarda çalışan, framework-bağımsız erişilebilirlik kütüphanesi.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
+  },
+  "keywords": [
+    "accessibility",
+    "a11y",
+    "eye-tracking",
+    "gaze",
+    "webcam",
+    "mediapipe",
+    "hands-free",
+    "erişilebilirlik",
+    "göz-takibi",
+    "assistive-technology"
+  ],
+  "author": "Umut Yaldız",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umutyaldiz/gazekit.git"
+  },
+  "homepage": "https://github.com/umutyaldiz/gazekit#readme",
+  "bugs": {
+    "url": "https://github.com/umutyaldiz/gazekit/issues"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.35"
+  },
+  "devDependencies": {
+    "@storybook/html": "^10.6.0",
+    "@storybook/html-vite": "^10.6.0",
+    "storybook": "^10.6.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.0",
+    "@storybook/addon-docs": "^10.6.0"
+  },
+  "overrides": {
+    "esbuild": "0.25.12",
+    "uuid": "^11.1.1"
+  }
+}

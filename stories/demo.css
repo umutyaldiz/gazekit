@@ -1,0 +1,62 @@
+.gkd {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #0f172a;
+  background: #f8fafc;
+  min-height: 100vh;
+  padding: 32px 20px 240px;
+}
+.gkd-wrap {
+  max-width: 62ch;
+  margin: 0 auto;
+}
+.gkd h1 {
+  font-size: 30px;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+}
+.gkd .gkd-lede {
+  font-size: 17px;
+  line-height: 1.6;
+  color: #334155;
+  margin: 0 0 24px;
+}
+.gkd-start {
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  background: #3b82f6;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 20px;
+  cursor: pointer;
+}
+.gkd-start:focus-visible {
+  outline: 3px solid #1e293b;
+  outline-offset: 2px;
+}
+.gkd-note {
+  font-size: 13px;
+  color: #64748b;
+  margin: 10px 0 28px;
+}
+.gkd-section {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 20px 22px;
+  margin: 0 0 18px;
+  line-height: 1.65;
+}
+.gkd-readout {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  white-space: pre;
+  pointer-events: none;
+}
